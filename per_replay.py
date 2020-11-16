@@ -3,11 +3,13 @@ source: https://github.com/unixpickle/anyrl-py/blob/master/anyrl/rollouts/replay
 Various replay buffer implementations.
 """
 from abc import ABC, abstractmethod, abstractproperty
+from collections import namedtuple
 from math import sqrt
 import random
 import pickle
 import numpy as np
 
+Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'n_reward'))
 
 class ReplayBuffer(ABC):
     """
@@ -153,13 +155,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         importance_weights /= np.power(self.errors.min() / self.errors.sum() * self.size, -beta)
         samples = []
         for i, weight in zip(indices, importance_weights):
-            sample = self.transitions[i].copy()
+            currTrans = self.transitions[i]
+            sample = Transition(currTrans.state, currTrans.action, currTrans.next_state, currTrans.reward, currTrans.n_reward)
             # print('sample is ')
             # print(sample)
             # print('weight is ')
             # print(weight)
-            sample['weight'] = weight
-            sample['id'] = i
+            # sample['weight'] = weight
+            # sample['id'] = i
             samples.append(sample)
 
         return samples

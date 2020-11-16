@@ -21,7 +21,6 @@ from torch.autograd import Variable
 from tensorboard_logger import configure, log_value
 import minerl
 
-import record_demonstrations
 from utils import ReplayMemory, PreprocessImage, EpsGreedyPolicy, Transition
 from models import DQN
 
@@ -30,17 +29,24 @@ USE_CUDA = torch.cuda.is_available()
 dtype = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 
 
+def convert(screen):
+    screen = torch.from_numpy(screen).float()
+    screen = screen.permute(2, 1, 0)
+    # screen = self.resize(screen)
+    # screen = screen.mean(0, keepdim=True)
+    screen = screen.unsqueeze(0)
+    return screen
+
+
 def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
     data = minerl.data.make(env_name, data_dir=data_path)
-    saver  = record_demonstrations.TransitionSaver()
     demo_num = 0
-    saver.new_episode()
-    for state, action, reward, next_state, done in data.sarsd_iter(num_epochs=500, max_sequence_len=2000):
+    for state, action, reward, next_state, done in data.batch_iter(batch_size=1, num_epochs=500, seq_len=2000):
+
         demo_num += 1
 
         if demo_num == 50:
             break
-
         parse_ts = 0
         episode_start_ts = 0
         nstep_gamma = 0.99
@@ -51,56 +57,60 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
         nstep_done_deque = deque()
         total_rew = 0.
 
-        length = state['pov'].shape[0]
+        length = state['pov'].shape[1]
         for i in range(0, length):
             # action_index = 0
-
-            camera_threshols = (abs(action['camera'][i][0]) + abs(action['camera'][i][1])) / 2.0
+            camera_threshols = (abs(action['camera'][0][i][0]) + abs(action['camera'][0][i][1])) / 2.0
             if (camera_threshols > 2.5):
-                if ((action['camera'][i][1] < 0) & (abs(action['camera'][i][0]) < abs(action['camera'][i][1]))):
-                    if (action['attack'][i] == 0):
+                if ((action['camera'][0][i][1] < 0) & (
+                        abs(action['camera'][0][i][0]) < abs(action['camera'][0][i][1]))):
+                    if (action['attack'][0][i] == 0):
                         action_index = 0
                     else:
                         action_index = 1
-                elif ((action['camera'][i][1] > 0) & (abs(action['camera'][i][0]) < abs(action['camera'][i][1]))):
-                    if (action['attack'][i] == 0):
+                elif ((action['camera'][0][i][1] > 0) & (
+                        abs(action['camera'][0][i][0]) < abs(action['camera'][0][i][1]))):
+                    if (action['attack'][0][i] == 0):
                         action_index = 2
                     else:
                         action_index = 3
-                elif ((action['camera'][i][0] < 0) & (abs(action['camera'][i][0]) > abs(action['camera'][i][1]))):
-                    if (action['attack'][i] == 0):
+                elif ((action['camera'][0][i][0] < 0) & (
+                        abs(action['camera'][0][i][0]) > abs(action['camera'][0][i][1]))):
+                    if (action['attack'][0][i] == 0):
                         action_index = 4
                     else:
                         action_index = 5
-                elif ((action['camera'][i][0] > 0) & (abs(action['camera'][i][0]) > abs(action['camera'][i][1]))):
-                    if (action['attack'][i] == 0):
+                elif ((action['camera'][0][i][0] > 0) & (
+                        abs(action['camera'][0][i][0]) > abs(action['camera'][0][i][1]))):
+                    if (action['attack'][0][i] == 0):
                         action_index = 6
                     else:
                         action_index = 7
-            elif (action['forward'][i] == 1):
-                if (action['attack'][i] == 0):
+            elif (action['forward'][0][i] == 1):
+                if (action['attack'][0][i] == 0):
                     action_index = 8
                 else:
                     action_index = 9
-            elif (action['jump'][i] == 1):
-                if (action['attack'][i] == 0):
+            elif (action['jump'][0][i] == 1):
+                if (action['attack'][0][i] == 0):
                     action_index = 10
                 else:
                     action_index = 11
             else:
-                if (action['attack'][i] == 0):
+                if (action['attack'][0][i] == 0):
                     continue
                 else:
                     action_index = 12
 
-            game_a = action_index
+            game_a = torch.IntTensor(action_index)
 
-            curr_obs = state['pov'][i]
+            curr_obs = convert(state['pov'][0][i])
+            _obs = convert(next_state['pov'][0][i])
+            _rew = torch.FloatTensor([reward[0][i]])
+            _done = done[0][i].astype(int)
 
-            _obs = next_state['pov'][i]
-
-            _rew = reward[i]
-            _done = done[i].astype(int)
+            if _done:
+                _obs = None
 
             episode_start_ts += 1
             parse_ts += 1
@@ -112,7 +122,6 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
             nstep_rew_list.append(_rew)
             nstep_nexts_deque.append(_obs)
             nstep_done_deque.append(_done)
-
 
             if episode_start_ts > 10:
                 add_transition(rep_buffer, nstep_state_deque, nstep_action_deque, nstep_rew_list, nstep_nexts_deque,
@@ -172,6 +181,7 @@ def add_transition(rep_buffer, ns_state, ns_action, ns_rew,
         trans = Transition(ns_state.popleft(), ns_action.popleft(), ns_nexts.popleft(), ns_rew.pop(0), ns_rew_sum)
         rep_buffer.add_sample(trans)
 
+
 def optimize_dqn(bsz, opt_step):
     transitions = memory.sample(bsz)
     batch = Transition(*zip(*transitions))
@@ -179,15 +189,16 @@ def optimize_dqn(bsz, opt_step):
     non_final_mask = torch.ByteTensor(tuple(map(lambda s: s is not None, batch.next_state)))
     non_final_next_states_t = torch.cat(tuple(s for s in batch.next_state if s is not None)).type(dtype)
     non_final_next_states = Variable(non_final_next_states_t, volatile=True)
-    state_batch = Variable(torch.cat(batch.state))
-    action_batch = Variable(torch.cat(batch.action).unsqueeze(1))
-    reward_batch = Variable(torch.cat(batch.reward))
+    state_batch = torch.cat(batch.state)
+    action_batch = torch.cat(batch.action)
+    reward_batch = torch.cat(batch.reward)
     if USE_CUDA:
         state_batch = state_batch.cuda()
         action_batch = action_batch.cuda()
         reward_batch = reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
     q_vals = model(state_batch)
+    print(q_vals.shape)
     state_action_values = q_vals.gather(1, action_batch)
 
     next_state_values = Variable(torch.zeros(bsz).cuda())
@@ -207,7 +218,6 @@ def optimize_dqn(bsz, opt_step):
 
 
 def optimize_dqfd(bsz, demo_prop, opt_step):
-
     # creating the training batch from a fixed proportion of demonstration transitions and agent transitions
     demo_samples = int(bsz * demo_prop)
     demo_trans = []
@@ -216,15 +226,14 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     agent_trans = memory.sample(bsz - demo_samples)
     transitions = demo_trans + agent_trans
     batch = Transition(*zip(*transitions))
-
     # creating PyTorch tensors for the transitions and calculating the q vals for the actions taken
     non_final_mask = torch.ByteTensor(tuple(map(lambda s: s is not None, batch.next_state)))
     non_final_next_states_t = torch.cat(tuple(s for s in batch.next_state if s is not None)).type(dtype)
     non_final_next_states = Variable(non_final_next_states_t, volatile=True)
-    state_batch = Variable(torch.cat(batch.state))
-    action_batch = Variable(torch.cat(batch.action).unsqueeze(1))
-    reward_batch = Variable(torch.cat(batch.reward))
-    n_reward_batch = Variable(torch.cat(batch.n_reward))
+    state_batch = torch.cat(batch.state)
+    action_batch = torch.cat(batch.action)
+    reward_batch = torch.cat(batch.reward)
+    n_reward_batch = torch.cat(batch.n_reward)
     if USE_CUDA:
         state_batch = state_batch.cuda()
         action_batch = action_batch.cuda()
@@ -232,6 +241,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
         n_reward_batch = n_reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
     q_vals = model(state_batch)
+    print(action_batch.shape)
     state_action_values = q_vals.gather(1, action_batch)
 
     # comparing the q values to the values expected using the next states and reward
@@ -250,7 +260,6 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     q_vals = q_vals + Variable(batch_margins).type(dtype)
     supervised_loss = (q_vals.max(1)[0].unsqueeze(1) - state_action_values).pow(2)[:demo_samples].sum()
 
-
     loss = q_loss + args.lam_sup * supervised_loss + args.lam_nstep * n_step_loss
 
     # optimization step and logging
@@ -265,8 +274,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     log_value('N Step Reward loss', n_step_loss.mean().data[0], opt_step)
 
 
-
-parser = argparse.ArgumentParser(description='Doom DQfD')
+parser = argparse.ArgumentParser(description='Minerl DQfD')
 
 # nn optimization hyperparams
 parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
@@ -275,14 +283,14 @@ parser.add_argument('--bsz', type=int, default=32, metavar='BSZ',
                     help='batch size (default: 32)')
 
 # model saving and loading settings
-parser.add_argument('--save-name', default='doom_dqn_model', metavar='FN',
+parser.add_argument('--save-name', default='minerl_dqn_model', metavar='FN',
                     help='path/prefix for the filename to save model\'s parameters')
 parser.add_argument('--load-name', default=None, metavar='LN',
                     help='path/prefix for the filename to load model\'s parameters')
 
 # RL training hyperparams
-parser.add_argument('--env-name', default='DoomBasic-v0', metavar='ENV',
-                    help='environment to train on (default: DoomBasic-v0')
+parser.add_argument('--env-name', default='MineRLTreechop-v0', metavar='ENV',
+                    help='environment to train on (default: MineRLTreechop-v0')
 parser.add_argument('--num-eps', type=int, default=-1, metavar='NE',
                     help='number of episodes to train (default: train forever)')
 parser.add_argument('--frame-skip', type=int, default=4, metavar='FS',
@@ -313,20 +321,17 @@ parser.add_argument('--lam-nstep', type=float, default=1.0, metavar='LN',
                     help='weight of the n-step loss (default 1.0)')
 
 # testing/monitoring settings
-parser.add_argument('--no-train', action="store_true",
+parser.add_argument('--no-train', action="store_true", default=False,
                     help='set to true if you don\'t want to actually train')
 parser.add_argument('--monitor', action="store_true",
                     help='whether to monitor results')
 parser.add_argument('--upload', action="store_true",
                     help='set this (and --monitor) if you want to upload monitored ' \
-                        'results to gym (requires api key in an api_key.json)')
-
-
-
+                         'results to gym (requires api key in an api_key.json)')
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    
+
     # setting the run name based on the save name set for the model and the timestamp
     timestring = str(date.today()) + '_' + time.strftime("%Hh-%Mm-%Ss", time.localtime(time.time()))
     save_name = args.save_name + '_' + timestring
@@ -335,7 +340,7 @@ if __name__ == '__main__':
     else:
         run_name = args.load_name.split('/')[-1]
     configure("logs/" + run_name, flush_secs=5)
-    
+
     # setting up the environment and the replay buffer(s)
     # env_spec = gym.spec('ppaquette/' + args.env_name)
     # env_spec.id = args.env_name
@@ -347,11 +352,11 @@ if __name__ == '__main__':
     # env = PreprocessImage(env)
     memory = per_replay.PrioritizedReplayBuffer(75000, alpha=0.4, beta=0.6, epsilon=0.001)
     action_len = 13
-    if args.demo_file is not None:
-        demos = parse_demo(args.env_name, memory, args.demo_file)
+
+    demos = parse_demo(args.env_name, memory, args.demo_file)
 
     # instantiating model and optimizer
-    model = DQN(dtype, (1, 80, 80), action_len)
+    model = DQN(dtype, (3, 64, 64), action_len)
     if args.load_name is not None:
         model.load_state_dict(pickle.load(open(args.load_name, 'rb')))
     if not args.no_train:
@@ -368,7 +373,7 @@ if __name__ == '__main__':
     opt_step = 0
 
     # pre-training
-    if args.demo_file is not None and not args.no_train:
+    if not args.no_train:
         print('Pre-training')
         for i in range(1000):
             opt_step += 1
@@ -400,11 +405,11 @@ if __name__ == '__main__':
 
             # storing the transition in a temporary replay buffer which is held in order to calculate n-step returns
             transitions.insert(0, Transition(state, action, next_state, reward, torch.zeros(1)))
-            state = next_state        
+            state = next_state
             gamma = 1
             new_trans = []
             for trans in transitions:
-                new_trans.append(trans._replace(n_reward= trans.n_reward + gamma * reward))
+                new_trans.append(trans._replace(n_reward=trans.n_reward + gamma * reward))
                 gamma = gamma * args.gamma
             transitions = new_trans
 
@@ -420,7 +425,7 @@ if __name__ == '__main__':
                     memory.push(last_trans)
 
                 state = next_state
-            
+
             else:
                 for trans in transitions:
                     memory.push(trans)
@@ -433,7 +438,8 @@ if __name__ == '__main__':
             # logging
             total_reward += reward
             if done:
-                print('Finished episode ' + str(i_episode) + ' with reward ' + str(total_reward[0]) + ' after ' + str(step_n) + ' steps')
+                print('Finished episode ' + str(i_episode) + ' with reward ' + str(total_reward[0]) + ' after ' + str(
+                    step_n) + ' steps')
                 log_value('Total Reward', total_reward[0], i_episode)
                 break
         # saving the model every 100 episodes
