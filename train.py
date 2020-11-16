@@ -2,6 +2,7 @@ from collections import deque
 from itertools import count
 import time
 from datetime import date
+import logging
 import pickle
 import argparse
 import json
@@ -24,8 +25,11 @@ import minerl
 from utils import ReplayMemory, PreprocessImage, EpsGreedyPolicy, Transition
 from models import DQN
 
+logging.basicConfig(logging.DEBUG)
+
 # GPU support
 USE_CUDA = torch.cuda.is_available()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dtype = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 
 
@@ -41,7 +45,7 @@ def convert(screen):
 def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
     data = minerl.data.make(env_name, data_dir=data_path)
     demo_num = 0
-    for state, action, reward, next_state, done in data.batch_iter(batch_size=1, num_epochs=500, seq_len=2000):
+    for state, action, reward, next_state, done in data.batch_iter(batch_size=1, num_epochs=400, seq_len=2000):
 
         demo_num += 1
 
@@ -102,7 +106,7 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
                 else:
                     action_index = 12
 
-            game_a = torch.IntTensor(action_index)
+            game_a = torch.LongTensor([action_index])
 
             curr_obs = convert(state['pov'][0][i])
             _obs = convert(next_state['pov'][0][i])
@@ -199,7 +203,7 @@ def optimize_dqn(bsz, opt_step):
         non_final_mask = non_final_mask.cuda()
     q_vals = model(state_batch)
     print(q_vals.shape)
-    state_action_values = q_vals.gather(1, action_batch)
+    state_action_values = q_vals.gather(1, action_batch.unsqueeze(0))
 
     next_state_values = Variable(torch.zeros(bsz).cuda())
     next_state_values[non_final_mask] = model(non_final_next_states).data.max(1)[0]
@@ -230,10 +234,12 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     non_final_mask = torch.ByteTensor(tuple(map(lambda s: s is not None, batch.next_state)))
     non_final_next_states_t = torch.cat(tuple(s for s in batch.next_state if s is not None)).type(dtype)
     non_final_next_states = Variable(non_final_next_states_t, volatile=True)
+    print(f"batch.action size : {len(batch.action)}")
     state_batch = torch.cat(batch.state)
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
     n_reward_batch = torch.cat(batch.n_reward)
+    print(f"action batch shape : {action_batch.shape}")
     if USE_CUDA:
         state_batch = state_batch.cuda()
         action_batch = action_batch.cuda()
@@ -241,7 +247,11 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
         n_reward_batch = n_reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
     q_vals = model(state_batch)
-    print(action_batch.shape)
+    print(f"state batch shape: {state_batch.shape}")
+    print(f"reward shape: {reward_batch.shape}")
+    action_batch = action_batch.unsqueeze(1)
+    print(f"action batch shape: {action_batch.shape}")
+    print(f"q_vals shape: {q_vals.shape}")
     state_action_values = q_vals.gather(1, action_batch)
 
     # comparing the q values to the values expected using the next states and reward
@@ -268,10 +278,10 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     torch.nn.utils.clip_grad_norm(model.parameters(), 100)
     optimizer.step()
 
-    log_value('Average loss', loss.mean().data[0], opt_step)
-    log_value('Q loss', q_loss.mean().data[0], opt_step)
-    log_value('Supervised loss', supervised_loss.mean().data[0], opt_step)
-    log_value('N Step Reward loss', n_step_loss.mean().data[0], opt_step)
+    log_value('Average loss', loss.mean(), opt_step)
+    log_value('Q loss', q_loss.mean(), opt_step)
+    log_value('Supervised loss', supervised_loss.mean(), opt_step)
+    log_value('N Step Reward loss', n_step_loss.mean(), opt_step)
 
 
 parser = argparse.ArgumentParser(description='Minerl DQfD')
@@ -313,7 +323,7 @@ parser.add_argument('--demo-prop', type=float, default=0.3, metavar='DR',
                     help='proportion of batch to set as transitions from the demo file')
 parser.add_argument('--demo-file', default=None, metavar='DF',
                     help='file to load pickled demonstrations')
-parser.add_argument('--margin', type=float, metavar='MG',
+parser.add_argument('--margin', type=float, metavar='MG', default=0.8,
                     help='margin for supervised loss used in DQfD (must be set)')
 parser.add_argument('--lam-sup', type=float, default=1.0, metavar='LS',
                     help='weight of the supervised loss (default 1.0)')
@@ -356,7 +366,7 @@ if __name__ == '__main__':
     demos = parse_demo(args.env_name, memory, args.demo_file)
 
     # instantiating model and optimizer
-    model = DQN(dtype, (3, 64, 64), action_len)
+    model = DQN(dtype, (3, 64, 64), action_len).to(device)
     if args.load_name is not None:
         model.load_state_dict(pickle.load(open(args.load_name, 'rb')))
     if not args.no_train:
