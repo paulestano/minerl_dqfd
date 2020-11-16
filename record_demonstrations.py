@@ -1,5 +1,4 @@
 import sys, gym
-import ppaquette_gym_doom
 from doom_utils import ToDiscrete
 from utils import ReplayMemory, PreprocessImage, Transition
 from datetime import date
@@ -16,12 +15,14 @@ class TransitionSaver:
         self.processor = PreprocessImage(None)
         self.memory = ReplayMemory()
         self.transitions = []
+        self.index = 0
+        self.nsteps = 10
 
     def new_episode(self, first_state):
         self.state = self.processor._observation(first_state)
 
-    def add_transition(self, action, next_state, reward):
-        if next_state is not None:
+    def add_transition(self, action, next_state, reward, done):
+        if not done and self.index < self.nsteps:
             next_state = self.processor._observation(next_state)
             self.transitions.insert(0, Transition(self.state, self.add_noop(action), next_state, torch.FloatTensor([reward]), torch.zeros(1)))
 

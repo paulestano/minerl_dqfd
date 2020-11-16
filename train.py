@@ -1,3 +1,4 @@
+from collections import deque
 from itertools import count
 import time
 from datetime import date
@@ -6,9 +7,10 @@ import argparse
 import json
 
 import gym
-import ppaquette_gym_doom
-from doom_utils import ToDiscrete
-from gym.wrappers import SkipWrapper, Monitor
+
+import per_replay
+
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -17,7 +19,9 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 from tensorboard_logger import configure, log_value
+import minerl
 
+import record_demonstrations
 from utils import ReplayMemory, PreprocessImage, EpsGreedyPolicy, Transition
 from models import DQN
 
@@ -25,9 +29,148 @@ from models import DQN
 USE_CUDA = torch.cuda.is_available()
 dtype = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 
-def load_demos(fname):
-    with open(fname, 'rb') as demo_file:
-        return pickle.load(demo_file)
+
+def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
+    data = minerl.data.make(env_name, data_dir=data_path)
+    saver  = record_demonstrations.TransitionSaver()
+    demo_num = 0
+    saver.new_episode()
+    for state, action, reward, next_state, done in data.sarsd_iter(num_epochs=500, max_sequence_len=2000):
+        demo_num += 1
+
+        if demo_num == 50:
+            break
+
+        parse_ts = 0
+        episode_start_ts = 0
+        nstep_gamma = 0.99
+        nstep_state_deque = deque()
+        nstep_action_deque = deque()
+        nstep_rew_list = []
+        nstep_nexts_deque = deque()
+        nstep_done_deque = deque()
+        total_rew = 0.
+
+        length = state['pov'].shape[0]
+        for i in range(0, length):
+            # action_index = 0
+
+            camera_threshols = (abs(action['camera'][i][0]) + abs(action['camera'][i][1])) / 2.0
+            if (camera_threshols > 2.5):
+                if ((action['camera'][i][1] < 0) & (abs(action['camera'][i][0]) < abs(action['camera'][i][1]))):
+                    if (action['attack'][i] == 0):
+                        action_index = 0
+                    else:
+                        action_index = 1
+                elif ((action['camera'][i][1] > 0) & (abs(action['camera'][i][0]) < abs(action['camera'][i][1]))):
+                    if (action['attack'][i] == 0):
+                        action_index = 2
+                    else:
+                        action_index = 3
+                elif ((action['camera'][i][0] < 0) & (abs(action['camera'][i][0]) > abs(action['camera'][i][1]))):
+                    if (action['attack'][i] == 0):
+                        action_index = 4
+                    else:
+                        action_index = 5
+                elif ((action['camera'][i][0] > 0) & (abs(action['camera'][i][0]) > abs(action['camera'][i][1]))):
+                    if (action['attack'][i] == 0):
+                        action_index = 6
+                    else:
+                        action_index = 7
+            elif (action['forward'][i] == 1):
+                if (action['attack'][i] == 0):
+                    action_index = 8
+                else:
+                    action_index = 9
+            elif (action['jump'][i] == 1):
+                if (action['attack'][i] == 0):
+                    action_index = 10
+                else:
+                    action_index = 11
+            else:
+                if (action['attack'][i] == 0):
+                    continue
+                else:
+                    action_index = 12
+
+            game_a = action_index
+
+            curr_obs = state['pov'][i]
+
+            _obs = next_state['pov'][i]
+
+            _rew = reward[i]
+            _done = done[i].astype(int)
+
+            episode_start_ts += 1
+            parse_ts += 1
+
+            _rew = np.sign(_rew) * np.log(1. + np.abs(_rew))
+
+            nstep_state_deque.append(curr_obs)
+            nstep_action_deque.append(game_a)
+            nstep_rew_list.append(_rew)
+            nstep_nexts_deque.append(_obs)
+            nstep_done_deque.append(_done)
+
+
+            if episode_start_ts > 10:
+                add_transition(rep_buffer, nstep_state_deque, nstep_action_deque, nstep_rew_list, nstep_nexts_deque,
+                               nstep_done_deque, _obs, False, nsteps, nstep_gamma)
+
+            # if episode done we reset
+            if _done:
+                # emptying the deques
+                add_transition(rep_buffer, nstep_state_deque, nstep_action_deque, nstep_rew_list, nstep_nexts_deque,
+                               nstep_done_deque, _obs, True, nsteps, nstep_gamma)
+
+                nstep_state_deque.clear()
+                nstep_action_deque.clear()
+                nstep_rew_list.clear()
+                nstep_nexts_deque.clear()
+                nstep_done_deque.clear()
+
+                episode_start_ts = 0
+
+                break
+
+        # replay is over emptying the deques
+        add_transition(rep_buffer, nstep_state_deque, nstep_action_deque, nstep_rew_list, nstep_nexts_deque,
+                       nstep_done_deque, _obs, True, nsteps, nstep_gamma)
+        print('Parse finished. {} expert samples added.'.format(parse_ts))
+
+    return rep_buffer
+
+
+# handles transitions to add to replay buffer and expert buffer
+# next step reward (ns_rew) is a list, the rest are deques
+def add_transition(rep_buffer, ns_state, ns_action, ns_rew,
+                   ns_nexts, ns_done, current_state, empty_deque=False, ns=10, ns_gamma=0.99, is_done=True):
+    ns_rew_sum = 0.
+    trans = {}
+    if empty_deque:
+        # emptying the deques
+        while len(ns_rew) > 0:
+            for j in range(len(ns_rew)):
+                ns_rew_sum += ns_rew[j] * ns_gamma ** j
+
+            # state,action,reward,
+            # next_state,done, n_step_rew_sum, n_steps later
+            # don't use done value because at this point the episode is done
+            # trans['sample'] = [ns_state.popleft(), ns_action.popleft(), ns_rew.pop(0),
+            #                    ns_nexts.popleft(), is_done, ns_rew_sum, current_state]
+            trans = Transition(ns_state.popleft(), ns_action.popleft(), ns_nexts.popleft(), ns_rew.pop(0), ns_rew_sum)
+            rep_buffer.add_sample(trans)
+    else:
+        for j in range(ns):
+            ns_rew_sum += ns_rew[j] * ns_gamma ** j
+
+        # state,action,reward,
+        # next_state,done, n_step_rew_sum, n_steps later
+        # trans['sample'] = [ns_state.popleft(), ns_action.popleft(), ns_rew.pop(0),
+        #                    ns_nexts.popleft(), ns_done.popleft(), ns_rew_sum, current_state]
+        trans = Transition(ns_state.popleft(), ns_action.popleft(), ns_nexts.popleft(), ns_rew.pop(0), ns_rew_sum)
+        rep_buffer.add_sample(trans)
 
 def optimize_dqn(bsz, opt_step):
     transitions = memory.sample(bsz)
@@ -194,22 +337,21 @@ if __name__ == '__main__':
     configure("logs/" + run_name, flush_secs=5)
     
     # setting up the environment and the replay buffer(s)
-    env_spec = gym.spec('ppaquette/' + args.env_name)
-    env_spec.id = args.env_name
-    env = env_spec.make()
-    env = ToDiscrete("minimal")(env)
-    if args.monitor:
-        env = Monitor(env, 'monitor/' + run_name, video_callable=lambda ep: ep % 10 == 0)
-    env = SkipWrapper(args.frame_skip)(env)
-    env = PreprocessImage(env)
-    env.reset()
-    memory = ReplayMemory(10000)
-
+    # env_spec = gym.spec('ppaquette/' + args.env_name)
+    # env_spec.id = args.env_name
+    # env = env_spec.make()
+    # env = ToDiscrete("minimal")(env)
+    # if args.monitor:
+    #     env = Monitor(env, 'monitor/' + run_name, video_callable=lambda ep: ep % 10 == 0)
+    # env = SkipWrapper(args.frame_skip)(env)
+    # env = PreprocessImage(env)
+    memory = per_replay.PrioritizedReplayBuffer(75000, alpha=0.4, beta=0.6, epsilon=0.001)
+    action_len = 13
     if args.demo_file is not None:
-        demos = load_demos(args.demo_file)
+        demos = parse_demo(args.env_name, memory, args.demo_file)
 
     # instantiating model and optimizer
-    model = DQN(dtype, (1, 80, 80), env.action_space.n)
+    model = DQN(dtype, (1, 80, 80), action_len)
     if args.load_name is not None:
         model.load_state_dict(pickle.load(open(args.load_name, 'rb')))
     if not args.no_train:
@@ -235,6 +377,9 @@ if __name__ == '__main__':
     else:
         args.demo_prop = 0
 
+    env = gym.make(args.env_name)
+    env.reset()
+
     # training loop
     ep_counter = count(1) if args.num_eps < 0 else range(args.num_eps)
     for i_episode in ep_counter:
@@ -250,6 +395,7 @@ if __name__ == '__main__':
             else:
                 action = policy.select_action(q_vals, env)
             next_state, reward, done, _ = env.step(action[0])
+            reward = np.sign(reward) * np.log(1. + np.abs(reward))
             reward = torch.Tensor([reward])
 
             # storing the transition in a temporary replay buffer which is held in order to calculate n-step returns

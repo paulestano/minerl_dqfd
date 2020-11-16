@@ -20,8 +20,8 @@ class PreprocessImage(ObservationWrapper):
     def _observation(self, screen):
         screen = torch.from_numpy(screen)
         screen = screen.permute(2, 1, 0)
-        screen = self.resize(screen)
-        screen = screen.mean(0, keepdim=True)
+        # screen = self.resize(screen)
+        # screen = screen.mean(0, keepdim=True)
         screen = screen.unsqueeze(0)
         return screen
 
