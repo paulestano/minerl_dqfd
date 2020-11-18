@@ -24,8 +24,9 @@ import minerl
 
 from utils import ReplayMemory, PreprocessImage, EpsGreedyPolicy, Transition
 from models import DQN
+import logging
 
-logging.basicConfig(logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 # GPU support
 USE_CUDA = torch.cuda.is_available()
@@ -45,14 +46,13 @@ def convert(screen):
 def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
     data = minerl.data.make(env_name, data_dir=data_path)
     demo_num = 0
-    for state, action, reward, next_state, done in data.batch_iter(batch_size=1, num_epochs=400, seq_len=2000):
-
-        demo_num += 1
-
-        if demo_num == 50:
-            break
-        parse_ts = 0
+    traj_names = data.get_trajectory_names()
+    np.random.shuffle(traj_names)
+    for n in traj_names[:50]:
+        logging.debug(f"parsing {n}")
         episode_start_ts = 0
+        parse_ts = 0
+
         nstep_gamma = 0.99
         nstep_state_deque = deque()
         nstep_action_deque = deque()
@@ -60,58 +60,60 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
         nstep_nexts_deque = deque()
         nstep_done_deque = deque()
         total_rew = 0.
+        for state, action, reward, next_state, done in data.load_data(n, skip_interval=4):
+            # for state, action, reward, next_state, done in data.batch_iter(batch_size=1, num_epochs=400, seq_len=2000):
 
-        length = state['pov'].shape[1]
-        for i in range(0, length):
+            length = state['pov']
+            # for i in range(0, length):
             # action_index = 0
-            camera_threshols = (abs(action['camera'][0][i][0]) + abs(action['camera'][0][i][1])) / 2.0
+            camera_threshols = (abs(action['camera'][0]) + abs(action['camera'][1])) / 2.0
             if (camera_threshols > 2.5):
-                if ((action['camera'][0][i][1] < 0) & (
-                        abs(action['camera'][0][i][0]) < abs(action['camera'][0][i][1]))):
-                    if (action['attack'][0][i] == 0):
+                if ((action['camera'][1] < 0) & (
+                        abs(action['camera'][0]) < abs(action['camera'][1]))):
+                    if (action['attack'] == 0):
                         action_index = 0
                     else:
                         action_index = 1
-                elif ((action['camera'][0][i][1] > 0) & (
-                        abs(action['camera'][0][i][0]) < abs(action['camera'][0][i][1]))):
-                    if (action['attack'][0][i] == 0):
+                elif ((action['camera'][1] > 0) & (
+                        abs(action['camera'][0]) < abs(action['camera'][1]))):
+                    if (action['attack'] == 0):
                         action_index = 2
                     else:
                         action_index = 3
-                elif ((action['camera'][0][i][0] < 0) & (
-                        abs(action['camera'][0][i][0]) > abs(action['camera'][0][i][1]))):
-                    if (action['attack'][0][i] == 0):
+                elif ((action['camera'][0] < 0) & (
+                        abs(action['camera'][0]) > abs(action['camera'][1]))):
+                    if (action['attack'] == 0):
                         action_index = 4
                     else:
                         action_index = 5
-                elif ((action['camera'][0][i][0] > 0) & (
-                        abs(action['camera'][0][i][0]) > abs(action['camera'][0][i][1]))):
-                    if (action['attack'][0][i] == 0):
+                elif ((action['camera'][0] > 0) & (
+                        abs(action['camera'][0]) > abs(action['camera'][1]))):
+                    if (action['attack'] == 0):
                         action_index = 6
                     else:
                         action_index = 7
-            elif (action['forward'][0][i] == 1):
-                if (action['attack'][0][i] == 0):
+            elif (action['forward'] == 1):
+                if (action['attack'] == 0):
                     action_index = 8
                 else:
                     action_index = 9
-            elif (action['jump'][0][i] == 1):
-                if (action['attack'][0][i] == 0):
+            elif (action['jump'] == 1):
+                if (action['attack'] == 0):
                     action_index = 10
                 else:
                     action_index = 11
             else:
-                if (action['attack'][0][i] == 0):
+                if (action['attack'] == 0):
                     continue
                 else:
                     action_index = 12
 
             game_a = torch.LongTensor([action_index])
 
-            curr_obs = convert(state['pov'][0][i])
-            _obs = convert(next_state['pov'][0][i])
-            _rew = torch.FloatTensor([reward[0][i]])
-            _done = done[0][i].astype(int)
+            curr_obs = convert(state['pov'])
+            _obs = convert(next_state['pov'])
+            _rew = torch.FloatTensor([reward])
+            _done = done
 
             if _done:
                 _obs = None
@@ -143,11 +145,7 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
                 nstep_nexts_deque.clear()
                 nstep_done_deque.clear()
 
-                episode_start_ts = 0
-
-                break
-
-        # replay is over emptying the deques
+            # replay is over emptying the deques
         add_transition(rep_buffer, nstep_state_deque, nstep_action_deque, nstep_rew_list, nstep_nexts_deque,
                        nstep_done_deque, _obs, True, nsteps, nstep_gamma)
         print('Parse finished. {} expert samples added.'.format(parse_ts))
@@ -233,13 +231,11 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     # creating PyTorch tensors for the transitions and calculating the q vals for the actions taken
     non_final_mask = torch.ByteTensor(tuple(map(lambda s: s is not None, batch.next_state)))
     non_final_next_states_t = torch.cat(tuple(s for s in batch.next_state if s is not None)).type(dtype)
-    non_final_next_states = Variable(non_final_next_states_t, volatile=True)
-    print(f"batch.action size : {len(batch.action)}")
+    non_final_next_states = non_final_next_states_t
     state_batch = torch.cat(batch.state)
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
     n_reward_batch = torch.cat(batch.n_reward)
-    print(f"action batch shape : {action_batch.shape}")
     if USE_CUDA:
         state_batch = state_batch.cuda()
         action_batch = action_batch.cuda()
@@ -247,16 +243,13 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
         n_reward_batch = n_reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
     q_vals = model(state_batch)
-    print(f"state batch shape: {state_batch.shape}")
-    print(f"reward shape: {reward_batch.shape}")
     action_batch = action_batch.unsqueeze(1)
-    print(f"action batch shape: {action_batch.shape}")
-    print(f"q_vals shape: {q_vals.shape}")
     state_action_values = q_vals.gather(1, action_batch)
 
     # comparing the q values to the values expected using the next states and reward
     next_state_values = Variable(torch.zeros(bsz).cuda())
-    next_state_values[non_final_mask] = model(non_final_next_states).data.max(1)[0]
+    with torch.no_grad():
+        next_state_values[non_final_mask] = model(non_final_next_states).data.max(1)[0]
     expected_state_action_values = (next_state_values * args.gamma) + reward_batch
 
     # calculating the q loss and n-step return loss
@@ -279,9 +272,13 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     optimizer.step()
 
     log_value('Average loss', loss.mean(), opt_step)
+    logging.debug(f"Average loss {loss.mean()}")
     log_value('Q loss', q_loss.mean(), opt_step)
+    logging.debug(f"Q loss {q_loss.mean()}")
     log_value('Supervised loss', supervised_loss.mean(), opt_step)
-    log_value('N Step Reward loss', n_step_loss.mean(), opt_step)
+    logging.debug(f"Supervised loss {loss.mean()}")
+    log_value("N Step Reward loss", n_step_loss.mean(), opt_step)
+    logging.debug(f"N Step Reward loss {n_step_loss.mean()}")
 
 
 parser = argparse.ArgumentParser(description='Minerl DQfD')
