@@ -199,12 +199,12 @@ def optimize_dqn(bsz, opt_step):
         action_batch = action_batch.cuda()
         reward_batch = reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
-    q_vals = model(state_batch)
+    q_vals = policy_net(state_batch)
     print(q_vals.shape)
     state_action_values = q_vals.gather(1, action_batch.unsqueeze(0))
 
     next_state_values = Variable(torch.zeros(bsz).cuda())
-    next_state_values[non_final_mask] = model(non_final_next_states).data.max(1)[0]
+    next_state_values[non_final_mask] = target_net(non_final_next_states).data.max(1)[0]
     expected_state_action_values = (next_state_values * args.gamma) + reward_batch
 
     q_loss = F.mse_loss(state_action_values, expected_state_action_values, size_average=False)
@@ -242,14 +242,14 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
         reward_batch = reward_batch.cuda()
         n_reward_batch = n_reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
-    q_vals = model(state_batch)
+    q_vals = policy_net(state_batch)
     action_batch = action_batch.unsqueeze(1)
     state_action_values = q_vals.gather(1, action_batch)
 
     # comparing the q values to the values expected using the next states and reward
     next_state_values = Variable(torch.zeros(bsz).cuda())
     with torch.no_grad():
-        next_state_values[non_final_mask] = model(non_final_next_states).data.max(1)[0]
+        next_state_values[non_final_mask] = target_net(non_final_next_states).data.max(1)[0]
     expected_state_action_values = (next_state_values * args.gamma) + reward_batch
 
     # calculating the q loss and n-step return loss
@@ -268,7 +268,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     # optimization step and logging
     optimizer.zero_grad()
     loss.backward()
-    torch.nn.utils.clip_grad_norm(model.parameters(), 100)
+    torch.nn.utils.clip_grad_norm(policy_net.parameters(), 100)
     optimizer.step()
 
     log_value('Average loss', loss.mean(), opt_step)
@@ -361,13 +361,14 @@ if __name__ == '__main__':
     action_len = 13
 
     demos = parse_demo(args.env_name, memory, args.demo_file)
-
+    TARGET_UPDATE = 10
     # instantiating model and optimizer
-    model = DQN(dtype, (3, 64, 64), action_len).to(device)
-    if args.load_name is not None:
-        model.load_state_dict(pickle.load(open(args.load_name, 'rb')))
+    policy_net = DQN(dtype, (3, 64, 64), action_len).to(device)
+    target_net = DQN(dtype, (3, 64, 64), action_len).to(device)
+    # if args.load_name is not None:
+        # model.load_state_dict(pickle.load(open(args.load_name, 'rb')))
     if not args.no_train:
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(policy_net.parameters(), lr=args.lr)
 
     # instantiating policy object
     if args.no_train:
@@ -385,6 +386,8 @@ if __name__ == '__main__':
         for i in range(1000):
             opt_step += 1
             optimize_dqfd(args.bsz, 1.0, opt_step)
+            if i%TARGET_UPDATE == 0:
+                target_net.load_state_dict(policy_net.state_dict())
         print('Pre-training done')
     else:
         args.demo_prop = 0
@@ -398,7 +401,7 @@ if __name__ == '__main__':
         state = env.reset()
         total_reward = 0
         transitions = []
-        q_vals = model(Variable(state.type(dtype), volatile=True)).data
+        q_vals = policy_net(Variable(state.type(dtype), volatile=True)).data
         for step_n in count():
 
             # selecting an action and playing it
@@ -424,7 +427,7 @@ if __name__ == '__main__':
             # (this algorithm uses 10-step returns)
             # otherwise push all transitions to the buffer
             if not done:
-                q_vals = model(Variable(next_state.type(dtype), volatile=True)).data
+                q_vals = policy_net(Variable(next_state.type(dtype), volatile=True)).data
 
                 if len(transitions) >= 10:
                     last_trans = transitions.pop()
@@ -451,7 +454,8 @@ if __name__ == '__main__':
                 break
         # saving the model every 100 episodes
         if i_episode % 100 == 0 and not args.no_train:
-            pickle.dump(model.state_dict(), open(save_name + '.p', 'wb'))
+            pickle.dump(policy_net.state_dict(), open(save_name + 'policy' + '.p', 'wb'))
+            pickle.dump(target_net.state_dict(), open(save_name + 'target' + '.p', 'wb'))
     env.close()
 
     # uploading results to gym (api_key.json required) although at the time of this code being written, the Gym website was read-only =\
