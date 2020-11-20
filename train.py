@@ -200,7 +200,6 @@ def optimize_dqn(bsz, opt_step):
         reward_batch = reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
     q_vals = policy_net(state_batch)
-    print(q_vals.shape)
     state_action_values = q_vals.gather(1, action_batch.unsqueeze(0))
 
     next_state_values = Variable(torch.zeros(bsz).cuda())
@@ -247,7 +246,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     state_action_values = q_vals.gather(1, action_batch)
 
     # comparing the q values to the values expected using the next states and reward
-    next_state_values = Variable(torch.zeros(bsz).cuda())
+    next_state_values = torch.zeros(bsz).cuda()
     next_state_values[non_final_mask] = target_net(non_final_next_states).data.max(1)[0].detach()
     expected_state_action_values = (next_state_values * args.gamma) + reward_batch
 
