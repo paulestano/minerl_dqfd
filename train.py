@@ -66,47 +66,42 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
             length = state['pov']
             # for i in range(0, length):
             # action_index = 0
-            camera_threshols = (abs(action['camera'][0]) + abs(action['camera'][1])) / 2.0
-            if (camera_threshols > 2.5):
-                if ((action['camera'][1] < 0) & (
-                        abs(action['camera'][0]) < abs(action['camera'][1]))):
-                    if (action['attack'] == 0):
-                        action_index = 0
-                    else:
-                        action_index = 1
-                elif ((action['camera'][1] > 0) & (
-                        abs(action['camera'][0]) < abs(action['camera'][1]))):
-                    if (action['attack'] == 0):
-                        action_index = 2
-                    else:
-                        action_index = 3
+            camera_threshold = (abs(action['camera'][0]) + abs(action['camera'][1])) / 2.0
+            if camera_threshold > 2.5:
+                # pitch +5
+                if ((action['camera'][0] > 0) & (
+                        abs(action['camera'][0]) > abs(action['camera'][1]))):
+                    action_idx = 0
+                # pitch -5
                 elif ((action['camera'][0] < 0) & (
                         abs(action['camera'][0]) > abs(action['camera'][1]))):
-                    if (action['attack'] == 0):
-                        action_index = 4
-                    else:
-                        action_index = 5
-                elif ((action['camera'][0] > 0) & (
-                        abs(action['camera'][0]) > abs(action['camera'][1]))):
-                    if (action['attack'] == 0):
-                        action_index = 6
-                    else:
-                        action_index = 7
-            elif (action['forward'] == 1):
-                if (action['attack'] == 0):
-                    action_index = 8
-                else:
-                    action_index = 9
-            elif (action['jump'] == 1):
-                if (action['attack'] == 0):
-                    action_index = 10
-                else:
-                    action_index = 11
+                    action_idx = 1
+                # yaw +5
+                elif ((action['camera'][1] > 0) & (
+                        abs(action['camera'][0]) < abs(action['camera'][1]))):
+                    action_idx = 2
+                # yax -5
+                elif ((action['camera'][1] < 0) & (
+                        abs(action['camera'][0]) < abs(action['camera'][1]))):
+                    action_idx = 3
+            # forward
+            elif action["forward"] == 1:
+                action_idx = 4
+                # forward and jump
+                if action["jump"] == 1:
+                    action_idx = 5
+            # left
+            elif action["left"] == 1:
+                action_idx = 6
+            # right
+            elif action["right"] == 1:
+                action_idx = 7
+            # back
+            elif action["back"] == 1:
+                action_idx = 8
+            # jump
             else:
-                if (action['attack'] == 0):
-                    continue
-                else:
-                    action_index = 12
+                action_idx = 9
 
             game_a = torch.LongTensor([action_index])
 
@@ -256,8 +251,9 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
 
     # calculating the supervised loss
     num_actions = q_vals.size(1)
-    margins = (torch.ones(num_actions, num_actions) - torch.eye(num_actions)) * args.margin
-    batch_margins = margins[action_batch.data.squeeze().cpu()]
+    margins = (torch.ones(num_actions, num_actions)) * args.margin
+    margins[action_batch.data.squeeze().cpu()] = 0
+    batch_margins = margins
     q_vals = q_vals + batch_margins.type(dtype)
     supervised_loss = (q_vals.max(1)[0].unsqueeze(1) - state_action_values)[:demo_samples].mean()
 

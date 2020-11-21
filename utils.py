@@ -16,9 +16,9 @@ class PreprocessImage(ObservationWrapper):
                     T.Scale((width,height), interpolation=Image.CUBIC),
                     T.ToTensor()])
 
-# image transformations, to a 1x1x80x80 tensor
+# image transformations, to a tensor
     def _observation(self, screen):
-        screen = torch.from_numpy(screen)
+        screen = torch.from_numpy(screen/255)
         screen = screen.permute(2, 1, 0)
         # screen = self.resize(screen)
         # screen = screen.mean(0, keepdim=True)
