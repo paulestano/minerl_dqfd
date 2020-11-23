@@ -270,7 +270,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
 parser = argparse.ArgumentParser(description='Minerl DQfD')
 
 # nn optimization hyperparams
-parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
+parser.add_argument('--lr', type=float, default=2.5e-4, metavar='LR',
                     help='learning rate (default: 0.001)')
 parser.add_argument('--bsz', type=int, default=32, metavar='BSZ',
                     help='batch size (default: 32)')
@@ -296,7 +296,7 @@ parser.add_argument('--gamma', type=float, default=1000, metavar='GAM',
 # policy hyperparams
 parser.add_argument('--eps-start', type=int, default=1.0, metavar='EST',
                     help='starting value for epsilon')
-parser.add_argument('--eps-end', type=int, default=0.0, metavar='EEND',
+parser.add_argument('--eps-end', type=int, default=0.01, metavar='EEND',
                     help='ending value for epsilon')
 parser.add_argument('--eps-steps', type=int, default=10000, metavar='ES',
                     help='number of episodes before epsilon equals eps-end (linearly degrades)')
@@ -339,8 +339,8 @@ if __name__ == '__main__':
     demos = parse_demo(args.env_name, memory, args.demo_file)
     TARGET_UPDATE = 10
     # instantiating model and optimizer
-    policy_net = DQN(dtype, (3, 64, 64), action_len).to(device)
-    target_net = DQN(dtype, (3, 64, 64), action_len).to(device)
+    policy_net = DQN(64, 64, action_len).to(device)
+    target_net = DQN(64, 64, action_len).to(device)
     # if args.load_name is not None:
         # model.load_state_dict(pickle.load(open(args.load_name, 'rb')))
     if not args.no_train:
