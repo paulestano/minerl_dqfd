@@ -250,15 +250,15 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     margins = (torch.ones(demo_samples, num_actions)) * args.margin
     margins[action_batch.data.squeeze().cpu()] = 0
     batch_margins = margins
-    q_vals = q_vals + batch_margins.type(dtype)
-    supervised_loss = (q_vals.max(1)[0].unsqueeze(1) - state_action_values[action_batch.squeeze()])[:demo_samples].mean()
+    q_vals_margin = q_vals + batch_margins.type(dtype)
+    supervised_loss = (q_vals_margin.max(1)[0].unsqueeze(1) - q_vals[action_batch.squeeze()])[:demo_samples]
 
     loss = q_loss + args.lam_sup * supervised_loss + args.lam_nstep * n_step_loss
 
     # optimization step and logging
     optimizer.zero_grad()
     loss.backward()
-    torch.nn.utils.clip_grad_norm(policy_net.parameters(), 1)
+    torch.nn.utils.clip_grad_norm(policy_net.parameters(), 100)
     optimizer.step()
 
     logging.debug(f"Average loss {loss.mean()}")
