@@ -103,7 +103,7 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
             else:
                 action_idx = 9
 
-            game_a = torch.LongTensor([action_index])
+            game_a = torch.LongTensor([action_idx])
 
             curr_obs = convert(state['pov'])
             _obs = convert(next_state['pov'])
