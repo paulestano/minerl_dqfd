@@ -258,7 +258,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     # optimization step and logging
     optimizer.zero_grad()
     loss.backward()
-    torch.nn.utils.clip_grad_norm(policy_net.parameters(), 100)
+    torch.nn.utils.clip_grad_norm(policy_net.parameters(), 1)
     optimizer.step()
 
     logging.debug(f"Average loss {loss.mean()}")
