@@ -238,12 +238,12 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
 
     # comparing the q values to the values expected using the next states and reward
     next_state_values = torch.zeros(bsz).cuda()
-    next_state_values[non_final_mask] = target_net(non_final_next_states).data.max(1)[0].detach()
+    next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0].detach()
     expected_state_action_values = (next_state_values * args.gamma) + reward_batch
 
     # calculating the q loss and n-step return loss
     q_loss = F.mse_loss(state_action_values, expected_state_action_values)
-    n_step_loss = (state_action_values + n_reward_batch).mean()
+    n_step_loss = (state_action_values.max(1)[0] + n_reward_batch).mean()
 
     # calculating the supervised loss
     num_actions = q_vals.size(1)
