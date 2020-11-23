@@ -226,18 +226,12 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
     n_reward_batch = torch.cat(batch.n_reward)
-    if USE_CUDA:
-        state_batch = state_batch.cuda()
-        action_batch = action_batch.cuda()
-        reward_batch = reward_batch.cuda()
-        n_reward_batch = n_reward_batch.cuda()
-        non_final_mask = non_final_mask.cuda()
     q_vals = policy_net(state_batch)
     action_batch = action_batch.unsqueeze(1)
     state_action_values = q_vals.gather(1, action_batch)
 
     # comparing the q values to the values expected using the next states and reward
-    next_state_values = torch.zeros(bsz).cuda()
+    next_state_values = torch.zeros(bsz, device=device)
     next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0].detach()
     expected_state_action_values = (next_state_values * args.gamma) + reward_batch
 
@@ -290,7 +284,7 @@ parser.add_argument('--frame-skip', type=int, default=4, metavar='FS',
                     help='number of frames to skip between agent input (must match frame skip for demos)')
 parser.add_argument('--init-states', type=int, default=1000, metavar='IS',
                     help='number of states to store in memory before training (default: 1000)')
-parser.add_argument('--gamma', type=float, default=1000, metavar='GAM',
+parser.add_argument('--gamma', type=float, default=0.99, metavar='GAM',
                     help='reward discount per step (default: 0.99)')
 
 # policy hyperparams
