@@ -49,7 +49,6 @@ def parse_demo(env_name, rep_buffer, data_path, nsteps=10):
     traj_names = data.get_trajectory_names()
     np.random.shuffle(traj_names)
     for n in traj_names[:50]:
-        logging.debug(f"parsing {n}")
         episode_start_ts = 0
         parse_ts = 0
 
