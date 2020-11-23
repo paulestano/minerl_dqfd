@@ -231,6 +231,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
         action_batch = action_batch.cuda()
         reward_batch = reward_batch.cuda()
         non_final_mask = non_final_mask.cuda()
+        n_reward_batch = n_reward_batch.cuda()
     q_vals = policy_net(state_batch)
     action_batch = action_batch.unsqueeze(1)
     state_action_values = q_vals.gather(1, action_batch)
