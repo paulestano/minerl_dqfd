@@ -20,7 +20,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-from tensorboard_logger import configure, log_value
 import minerl
 
 from utils import ReplayMemory, PreprocessImage, EpsGreedyPolicy, Transition
@@ -210,9 +209,6 @@ def optimize_dqn(bsz, opt_step):
     loss.backward()
     optimizer.step()
 
-    log_value('Average loss', loss.mean().data[0], opt_step)
-    log_value('Q loss', q_loss.mean().data[0], opt_step)
-
 
 def optimize_dqfd(bsz, demo_prop, opt_step):
     # creating the training batch from a fixed proportion of demonstration transitions and agent transitions
@@ -266,13 +262,9 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     torch.nn.utils.clip_grad_norm(policy_net.parameters(), 100)
     optimizer.step()
 
-    log_value('Average loss', loss.mean(), opt_step)
     logging.debug(f"Average loss {loss.mean()}")
-    log_value('Q loss', q_loss.mean(), opt_step)
     logging.debug(f"Q loss {q_loss.mean()}")
-    log_value('Supervised loss', supervised_loss.mean(), opt_step)
     logging.debug(f"Supervised loss {loss.mean()}")
-    log_value("N Step Reward loss", n_step_loss.mean(), opt_step)
     logging.debug(f"N Step Reward loss {n_step_loss.mean()}")
 
 
@@ -341,17 +333,7 @@ if __name__ == '__main__':
         run_name = save_name.split('/')[-1]
     else:
         run_name = args.load_name.split('/')[-1]
-    configure("logs/" + run_name, flush_secs=5)
 
-    # setting up the environment and the replay buffer(s)
-    # env_spec = gym.spec('ppaquette/' + args.env_name)
-    # env_spec.id = args.env_name
-    # env = env_spec.make()
-    # env = ToDiscrete("minimal")(env)
-    # if args.monitor:
-    #     env = Monitor(env, 'monitor/' + run_name, video_callable=lambda ep: ep % 10 == 0)
-    # env = SkipWrapper(args.frame_skip)(env)
-    # env = PreprocessImage(env)
     memory = per_replay.PrioritizedReplayBuffer(75000, alpha=0.4, beta=0.6, epsilon=0.001)
     action_len = 13
 
@@ -445,7 +427,7 @@ if __name__ == '__main__':
             if done:
                 print('Finished episode ' + str(i_episode) + ' with reward ' + str(total_reward[0]) + ' after ' + str(
                     step_n) + ' steps')
-                log_value('Total Reward', total_reward[0], i_episode)
+                logging.debug(f"Total Reward { total_reward[0]} for episode {i_episode}")
                 break
         # saving the model every 100 episodes
         if i_episode % 100 == 0 and not args.no_train:
