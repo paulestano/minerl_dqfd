@@ -339,8 +339,8 @@ if __name__ == '__main__':
     demos = parse_demo(args.env_name, memory, args.demo_file)
     TARGET_UPDATE = 10
     # instantiating model and optimizer
-    policy_net = DQN(64, 64, 256, action_len).to(device)
-    target_net = DQN(64, 64, 256, action_len).to(device)
+    policy_net = DQN(64, 64, 512, action_len).to(device)
+    target_net = DQN(64, 64, 512, action_len).to(device)
     # if args.load_name is not None:
         # model.load_state_dict(pickle.load(open(args.load_name, 'rb')))
     if not args.no_train:
