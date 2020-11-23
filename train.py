@@ -7,6 +7,7 @@ import pickle
 import argparse
 import json
 
+from environment import MyEnv
 import gym
 
 import per_replay
@@ -251,7 +252,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
 
     # calculating the supervised loss
     num_actions = q_vals.size(1)
-    margins = (torch.ones(num_actions, num_actions)) * args.margin
+    margins = (torch.ones(demo_samples, num_actions)) * args.margin
     margins[action_batch.data.squeeze().cpu()] = 0
     batch_margins = margins
     q_vals = q_vals + batch_margins.type(dtype)
@@ -386,7 +387,7 @@ if __name__ == '__main__':
     else:
         args.demo_prop = 0
 
-    env = gym.make(args.env_name)
+    env = MyEnv()
     env.reset()
 
     # training loop
@@ -395,7 +396,7 @@ if __name__ == '__main__':
         state = env.reset()
         total_reward = 0
         transitions = []
-        q_vals = policy_net(Variable(state.type(dtype), volatile=True)).data
+        q_vals = policy_net(state)
         for step_n in count():
 
             # selecting an action and playing it
@@ -408,7 +409,7 @@ if __name__ == '__main__':
             reward = torch.Tensor([reward])
 
             # storing the transition in a temporary replay buffer which is held in order to calculate n-step returns
-            transitions.insert(0, Transition(state, action, next_state, reward, torch.zeros(1)))
+            transitions.insert(0, Transition(convert(state), action, convert(next_state), reward, torch.zeros(1)))
             state = next_state
             gamma = 1
             new_trans = []
@@ -421,7 +422,7 @@ if __name__ == '__main__':
             # (this algorithm uses 10-step returns)
             # otherwise push all transitions to the buffer
             if not done:
-                q_vals = policy_net(Variable(next_state.type(dtype), volatile=True)).data
+                q_vals = policy_net(next_state)
 
                 if len(transitions) >= 10:
                     last_trans = transitions.pop()
