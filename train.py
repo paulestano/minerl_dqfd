@@ -251,7 +251,7 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     margins[action_batch.data.squeeze().cpu()] = 0
     batch_margins = margins
     q_vals = q_vals + batch_margins.type(dtype)
-    supervised_loss = (q_vals.max(1)[0].unsqueeze(1) - state_action_values)[:demo_samples].mean()
+    supervised_loss = (q_vals.max(1)[0].unsqueeze(1) - state_action_values[action_batch.squeeze()])[:demo_samples].mean()
 
     loss = q_loss + args.lam_sup * supervised_loss + args.lam_nstep * n_step_loss
 
