@@ -35,7 +35,7 @@ dtype = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 
 
 def convert(screen):
-    screen = torch.from_numpy(screen).float()
+    screen = torch.from_numpy(screen/255).float()
     screen = screen.permute(2, 1, 0)
     # screen = self.resize(screen)
     # screen = screen.mean(0, keepdim=True)
