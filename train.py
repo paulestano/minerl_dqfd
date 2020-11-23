@@ -226,6 +226,11 @@ def optimize_dqfd(bsz, demo_prop, opt_step):
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
     n_reward_batch = torch.cat(batch.n_reward)
+    if USE_CUDA:
+        state_batch = state_batch.cuda()
+        action_batch = action_batch.cuda()
+        reward_batch = reward_batch.cuda()
+        non_final_mask = non_final_mask.cuda()
     q_vals = policy_net(state_batch)
     action_batch = action_batch.unsqueeze(1)
     state_action_values = q_vals.gather(1, action_batch)
