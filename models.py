@@ -42,7 +42,7 @@ class DQN(nn.Module):
     #     x = F.leaky_relu(self.lin1(x))
     #     x = F.leaky_relu(self.lin2(x))
     #     return self.lin3(x)
-    def __init__(self, h, w, outputs):
+    def __init__(self, h, w, hidden_layers, outputs):
         super(DQN, self).__init__()
         self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
         self.bn1 = nn.BatchNorm2d(16)
@@ -58,7 +58,8 @@ class DQN(nn.Module):
         convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w)))
         convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h)))
         linear_input_size = convw * convh * 32
-        self.head = nn.Linear(linear_input_size, outputs)
+        self.hidden = nn.Linear(linear_input_size, hidden_layers)
+        self.head = nn.Linear(hidden_layers, outputs)
 
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
